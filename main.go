@@ -5,7 +5,6 @@ import (
 	"bufio"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"strconv"
 )
@@ -13,16 +12,13 @@ import (
 const TransactionFilePath = "transactions.json"
 
 func main() {
-	store, err := billing.LoadLoans(TransactionFilePath)
-	if err != nil {
-		log.Fatalf("Failed to load loans: %v", err)
-	}
-	_ = store.MakePayment("b811472d98c0fe8d", 10, TransactionFilePath)
+	repo := billing.NewLoanRepository(TransactionFilePath)
+	engine := billing.NewBillingEngine(repo)
 
-	runCLI(store, os.Stdin, os.Stdout)
+	runCLI(engine, os.Stdin, os.Stdout)
 }
 
-func runCLI(store *billing.LoanStore, input *os.File, output *os.File) {
+func runCLI(engine *billing.BillingEngine, input *os.File, output *os.File) {
 	scanner := bufio.NewScanner(input)
 	for {
 		fmt.Fprintln(output, "\n***************************************************************")
@@ -40,15 +36,15 @@ func runCLI(store *billing.LoanStore, input *os.File, output *os.File) {
 
 		switch choice {
 		case "1":
-			createNewLoan(store, scanner, output)
+			createNewLoan(engine, scanner, output)
 		case "2":
-			getOutstanding(store, scanner, output)
+			getOutstanding(engine, scanner, output)
 		case "3":
-			generateSchedule(store, scanner, output)
+			generateSchedule(engine, scanner, output)
 		case "4":
-			makePayment(store, scanner, output)
+			makePayment(engine, scanner, output)
 		case "5":
-			checkDelinquency(store, scanner, output)
+			checkDelinquency(engine, scanner, output)
 		case "6":
 			fmt.Fprintln(output, "Exiting...")
 			return
@@ -58,7 +54,7 @@ func runCLI(store *billing.LoanStore, input *os.File, output *os.File) {
 	}
 }
 
-func createNewLoan(store *billing.LoanStore, scanner *bufio.Scanner, output *os.File) {
+func createNewLoan(engine *billing.BillingEngine, scanner *bufio.Scanner, output *os.File) {
 	fmt.Fprint(output, "Enter principal amount: ")
 	scanner.Scan()
 	principal, _ := strconv.ParseFloat(scanner.Text(), 64)
@@ -71,7 +67,7 @@ func createNewLoan(store *billing.LoanStore, scanner *bufio.Scanner, output *os.
 	scanner.Scan()
 	weeks, _ := strconv.Atoi(scanner.Text())
 
-	loanID, err := store.NewLoan(principal, rate, weeks, TransactionFilePath)
+	loanID, err := engine.NewLoan(principal, rate, weeks)
 	if err != nil {
 		fmt.Fprintln(output, "Error creating loan:", err)
 		return
@@ -79,12 +75,12 @@ func createNewLoan(store *billing.LoanStore, scanner *bufio.Scanner, output *os.
 	fmt.Fprintln(output, "New Loan ID:", loanID)
 }
 
-func getOutstanding(store *billing.LoanStore, scanner *bufio.Scanner, output io.Writer) {
+func getOutstanding(engine *billing.BillingEngine, scanner *bufio.Scanner, output io.Writer) {
 	fmt.Fprint(output, "Enter Loan ID: ")
 	scanner.Scan()
 	loanID := scanner.Text()
 
-	outstanding, err := store.GetOutstanding(loanID)
+	outstanding, err := engine.GetOutstanding(loanID)
 	if err != nil {
 		fmt.Fprintln(output, "Error:", err)
 		return
@@ -92,12 +88,12 @@ func getOutstanding(store *billing.LoanStore, scanner *bufio.Scanner, output io.
 	fmt.Fprintf(output, "Outstanding amount: %.2f\n", outstanding)
 }
 
-func generateSchedule(store *billing.LoanStore, scanner *bufio.Scanner, output io.Writer) {
+func generateSchedule(engine *billing.BillingEngine, scanner *bufio.Scanner, output io.Writer) {
 	fmt.Fprint(output, "Enter Loan ID: ")
 	scanner.Scan()
 	loanID := scanner.Text()
 
-	schedule, err := store.GeneratePaymentSchedule(loanID)
+	schedule, err := engine.GeneratePaymentSchedule(loanID)
 	if err != nil {
 		fmt.Fprintln(output, "Error:", err)
 		return
@@ -107,16 +103,20 @@ func generateSchedule(store *billing.LoanStore, scanner *bufio.Scanner, output i
 	}
 }
 
-func makePayment(store *billing.LoanStore, scanner *bufio.Scanner, output *os.File) {
+func makePayment(engine *billing.BillingEngine, scanner *bufio.Scanner, output *os.File) {
 	fmt.Fprint(output, "Enter Loan ID: ")
 	scanner.Scan()
 	loanID := scanner.Text()
 
-	fmt.Fprint(output, "Enter current week: ")
+	fmt.Fprint(output, "Enter payment week: ")
 	scanner.Scan()
-	currentWeek, _ := strconv.Atoi(scanner.Text())
+	paymentWeek, _ := strconv.Atoi(scanner.Text())
 
-	err := store.MakePayment(loanID, currentWeek, TransactionFilePath)
+	fmt.Fprint(output, "Enter amount: ")
+	scanner.Scan()
+	amount, _ := strconv.ParseFloat(scanner.Text(), 64)
+
+	err := engine.MakePayment(loanID, paymentWeek, amount)
 	if err != nil {
 		fmt.Fprintln(output, "Error making payment:", err)
 		return
@@ -124,7 +124,7 @@ func makePayment(store *billing.LoanStore, scanner *bufio.Scanner, output *os.Fi
 	fmt.Fprintln(output, "Payment successful!")
 }
 
-func checkDelinquency(store *billing.LoanStore, scanner *bufio.Scanner, output io.Writer) {
+func checkDelinquency(engine *billing.BillingEngine, scanner *bufio.Scanner, output io.Writer) {
 	fmt.Fprint(output, "Enter Loan ID: ")
 	scanner.Scan()
 	loanID := scanner.Text()
@@ -133,7 +133,7 @@ func checkDelinquency(store *billing.LoanStore, scanner *bufio.Scanner, output i
 	scanner.Scan()
 	currentWeek, _ := strconv.Atoi(scanner.Text())
 
-	isDelinquent, err := store.IsDelinquent(loanID, currentWeek)
+	isDelinquent, err := engine.IsDelinquent(loanID, currentWeek)
 	if err != nil {
 		fmt.Fprintln(output, "Error checking delinquency:", err)
 	} else if isDelinquent {
@@ -141,5 +141,4 @@ func checkDelinquency(store *billing.LoanStore, scanner *bufio.Scanner, output i
 	} else {
 		fmt.Fprintln(output, "Borrower is not delinquent.")
 	}
-
 }
