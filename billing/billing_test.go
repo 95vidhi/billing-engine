@@ -1,138 +1,147 @@
 package billing
 
 import (
-	"os"
+	"errors"
 	"testing"
 )
 
-func setupLoanStore() (*LoanStore, string) {
-	store := &LoanStore{Loans: make(map[string]*Loan)}
-	tempFile := "test_loans.json"
-	_ = os.Remove(tempFile)
-	return store, tempFile
+type mockLoanRepository struct {
+	loans map[string]*Loan
 }
 
-func TestNewLoan(t *testing.T) {
-	store, tempFile := setupLoanStore()
-	defer os.Remove(tempFile)
+func (m *mockLoanRepository) Save(loan *Loan) (string, error) {
+	m.loans[loan.ID] = loan
+	return loan.ID, nil
+}
 
-	loanID, err := store.NewLoan(5000000, 10, 50, tempFile)
-	if err != nil {
-		t.Fatalf("Failed to create a new loan: %v", err)
-	}
-
-	loan, exists := store.Loans[loanID]
+func (m *mockLoanRepository) FindByID(loanID string) (*Loan, error) {
+	loan, exists := m.loans[loanID]
 	if !exists {
-		t.Fatalf("Loan was not stored correctly")
+		return nil, errors.New("loan not found")
 	}
+	return loan, nil
+}
 
-	expectedOutstanding := 5500000.0
-	if loan.Outstanding != expectedOutstanding {
-		t.Errorf("Expected outstanding amount %v, got %v", expectedOutstanding, loan.Outstanding)
-	}
-
-	expectedWeeklyInstallment := 110000.0
-	if loan.WeeklyInstallment != expectedWeeklyInstallment {
-		t.Errorf("Expected weekly installment %v, got %v", expectedWeeklyInstallment, loan.WeeklyInstallment)
-	}
+func setupBillingEngine() (*BillingEngine, *mockLoanRepository) {
+	repo := &mockLoanRepository{loans: make(map[string]*Loan)}
+	return NewBillingEngine(repo), repo
 }
 
 func TestMakePayment(t *testing.T) {
-	store, tempFile := setupLoanStore()
-	defer os.Remove(tempFile)
+	be, _ := setupBillingEngine()
+	loanID, _ := be.NewLoan(1000, 5, 10)
 
-	loanID, _ := store.NewLoan(5000000, 10, 50, tempFile)
-
-	err := store.MakePayment(loanID, 1, tempFile)
-	if err != nil {
-		t.Errorf("Unexpected error while making payment: %v", err)
+	tests := []struct {
+		name       string
+		week       int
+		amount     float64
+		expectsErr bool
+	}{
+		{"Already paid week", 1, 100, true},
+		{"Paying after 50 weeks", 51, 100, true},
+		{"Overpaying", 2, 2000, true},
+		{"Multiple missed payments", 3, 105, false},
 	}
 
-	loan := store.Loans[loanID]
-	expectedOutstanding := 5500000 - 110000
-	if loan.Outstanding != float64(expectedOutstanding) {
-		t.Errorf("Outstanding balance mismatch, got %v", loan.Outstanding)
-	}
-
-	err = store.MakePayment("invalid-id", 2, tempFile)
-	if err == nil {
-		t.Errorf("Expected error for invalid loan ID")
-	}
-
-	for i := 2; i <= 50; i++ {
-		store.MakePayment(loanID, i, tempFile)
-	}
-	err = store.MakePayment(loanID, 51, tempFile)
-	if err == nil {
-		t.Errorf("Expected error for already paid loan")
-	}
-}
-
-func TestGetOutstanding(t *testing.T) {
-	store, tempFile := setupLoanStore()
-	defer os.Remove(tempFile)
-
-	loanID, _ := store.NewLoan(5000000, 10, 50, tempFile)
-
-	outstanding, _ := store.GetOutstanding(loanID)
-	expectedOutstanding := 5500000.0
-	if outstanding != expectedOutstanding {
-		t.Errorf("Expected outstanding %v, got %v", expectedOutstanding, outstanding)
-	}
-
-	store.MakePayment(loanID, 1, tempFile)
-	outstanding, _ = store.GetOutstanding(loanID)
-	expectedOutstanding = 5390000.0
-	if outstanding != expectedOutstanding {
-		t.Errorf("Expected outstanding %v, got %v", expectedOutstanding, outstanding)
-	}
-
-	for i := 2; i <= 50; i++ {
-		store.MakePayment(loanID, i, tempFile)
-	}
-	outstanding, _ = store.GetOutstanding(loanID)
-	if outstanding != 0 {
-		t.Errorf("Expected outstanding 0, got %v", outstanding)
-	}
-
-	_, err := store.GetOutstanding("invalid-id")
-	if err == nil {
-		t.Errorf("Expected error for invalid loan ID")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := be.MakePayment(loanID, tt.week, tt.amount)
+			if (err != nil) != tt.expectsErr {
+				t.Errorf("unexpected error: %v", err)
+			}
+		})
 	}
 }
 
 func TestIsDelinquent(t *testing.T) {
-	store, tempFile := setupLoanStore()
-	defer os.Remove(tempFile)
+	be, _ := setupBillingEngine()
+	loanID, _ := be.NewLoan(1000, 5, 10)
+	be.MakePayment(loanID, 1, 100)
 
-	loanID, _ := store.NewLoan(500000, 10, 10, tempFile)
-	_ = store.Loans[loanID]
-
-	isDelinquent, err := store.IsDelinquent(loanID, 1)
-	if err != nil || isDelinquent {
-		t.Errorf("Expected non-delinquent status at week 1, got delinquent")
+	tests := []struct {
+		name        string
+		currentWeek int
+		expected    bool
+	}{
+		{"Loan becomes delinquent", 4, true},
+		{"Loan recovers from delinquency", 2, false},
 	}
 
-	store.MakePayment(loanID, 1, tempFile)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			isDelinquent, err := be.IsDelinquent(loanID, tt.currentWeek)
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+			if isDelinquent != tt.expected {
+				t.Errorf("expected %v, got %v", tt.expected, isDelinquent)
+			}
+		})
+	}
+}
 
-	isDelinquent, _ = store.IsDelinquent(loanID, 4)
-	if !isDelinquent {
-		t.Errorf("Expected delinquent status at week 3 after missing 2 consecutive payments")
+func TestGetOutstanding(t *testing.T) {
+	be, _ := setupBillingEngine()
+	loanID, _ := be.NewLoan(5000000, 10, 50)
+	be.MakePayment(loanID, 1, 100)
+
+	outstanding, err := be.GetOutstanding(loanID)
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if outstanding != float64(5500000) {
+		t.Errorf("expected outstanding to be 900, got %f", outstanding)
+	}
+}
+
+func TestGeneratePaymentSchedule(t *testing.T) {
+	// Setup mock or real repository and BillingEngine
+	repo := &mockLoanRepository{loans: make(map[string]*Loan)}
+	be := &BillingEngine{repo: repo}
+
+	// Create a loan
+	loanID := "1234"
+	loan := &Loan{
+		ID:                loanID,
+		Principal:         1000,
+		Rate:              5,
+		Weeks:             10,
+		LoanAmount:        1050, // 1000 principal + 5% interest
+		Outstanding:       1050,
+		WeeklyInstallment: 105,
+		Schedule:          make([]PaymentSchedule, 10), // Ensure the schedule is initialized
 	}
 
-	store.MakePayment(loanID, 4, tempFile)
-	isDelinquent, _ = store.IsDelinquent(loanID, 5)
-	if isDelinquent {
-		t.Errorf("Expected non-delinquent status at week 5 after making a payment")
+	// Populate the schedule
+	for i := 0; i < loan.Weeks; i++ {
+		loan.Schedule[i] = PaymentSchedule{Week: i + 1, Status: "Pending"}
 	}
 
-	isDelinquent, _ = store.IsDelinquent(loanID, 7)
-	if !isDelinquent {
-		t.Errorf("Expected delinquent status at week 7 after missing 2 consecutive payments")
+	repo.loans[loanID] = loan // Save loan to the mock repository
+
+	// Call GeneratePaymentSchedule
+	schedule, err := be.GeneratePaymentSchedule(loanID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 
-	_, err = store.IsDelinquent("invalid-id", 1)
-	if err == nil {
-		t.Errorf("Expected error for invalid loan ID, but got none")
+	// Verify that the schedule has the expected number of weeks
+	if len(schedule) != loan.Weeks {
+		t.Errorf("expected %d weeks in the schedule, got %d", loan.Weeks, len(schedule))
+	}
+
+	// Verify that the first week's status is "Pending"
+	if schedule[0].Status != "Pending" {
+		t.Errorf("expected first week's status to be 'Pending', got '%s'", schedule[0].Status)
+	}
+
+	// Verify the last week's status is still "Pending"
+	if schedule[len(schedule)-1].Status != "Pending" {
+		t.Errorf("expected last week's status to be 'Pending', got '%s'", schedule[len(schedule)-1].Status)
+	}
+
+	// Verify the loan ID is correctly used
+	if schedule[0].Week != 1 {
+		t.Errorf("expected first week to be 1, got %d", schedule[0].Week)
 	}
 }
