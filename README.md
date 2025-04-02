@@ -1,4 +1,3 @@
-```markdown
 # Billing Engine
 
 ## Overview
@@ -115,4 +114,23 @@ go test -cover ./...
 - Partial payments are not supported; full weekly payments are required.
 - The system assumes loans are paid weekly until fully repaid.
 
-```
+## Sample Input and Outputs
+### Create New Loan
+![image](https://github.com/user-attachments/assets/d3fc6aab-bcc9-4eb7-87e7-f0b512be8c8f)
+
+### Check Outstanding Amount
+![image](https://github.com/user-attachments/assets/19b116dc-6c3b-44d8-97a6-add0373f8db5)
+
+## Generate Payment Schedule
+![image](https://github.com/user-attachments/assets/9caaa55f-3522-49a5-b9ae-ee9b7b24e4b1)
+
+### Make Payment With Invalid Amount
+![image](https://github.com/user-attachments/assets/d1d3fbef-d54f-49e7-9982-489e7b4cdf45)
+
+### Make Payment With Valid Amount
+![image](https://github.com/user-attachments/assets/99147159-754b-410b-a603-359a58831f5e)
+
+### Check If Browrrer if Delinquent
+![image](https://github.com/user-attachments/assets/de742f0f-14cd-48d9-b540-05bd21b43814)
+
+
